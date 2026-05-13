@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Live Ticker - Plataforma de Trading</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #0f172a;
+      color: #e5e7eb;
+    }
+
+    header {
+      padding: 24px;
+      background: #111827;
+      border-bottom: 1px solid #374151;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+    }
+
+    .subtitle {
+      margin-top: 8px;
+      color: #9ca3af;
+    }
+
+    main {
+      padding: 24px;
+    }
+
+    #status {
+      display: inline-block;
+      margin-bottom: 24px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: #374151;
+      font-size: 14px;
+    }
+
+    #ticker-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+    }
+
+    .asset {
+      font-size: 22px;
+      font-weight: bold;
+      margin-bottom: 12px;
+    }
+
+    .price {
+      font-size: 30px;
+      font-weight: bold;
+      color: #22c55e;
+      margin-bottom: 8px;
+    }
+
+    .timestamp {
+      color: #9ca3af;
+      font-size: 13px;
+    }
+
+    .empty {
+      color: #9ca3af;
+      padding: 24px;
+      border: 1px dashed #4b5563;
+      border-radius: 16px;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Live Ticker</h1>
+    <div class="subtitle">
+      Hot-Path con RabbitMQ Topic Exchange → WebSocket
+    </div>
+  </header>
+
+  <main>
+    <div id="status">Conectando...</div>
+
+    <div id="ticker-grid">
+      <div class="empty" id="empty-state">
+        Esperando ticks de mercado...
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const statusElement = document.getElementById("status");
+    const grid = document.getElementById("ticker-grid");
+    const emptyState = document.getElementById("empty-state");
+
+    const cards = new Map();
+
+    function formatPrice(price) {
+      const numericPrice = Number(price);
+
+      if (Number.isNaN(numericPrice)) {
+        return price;
+      }
+
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 2
+      }).format(numericPrice);
+    }
+
+    function createCard(asset) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.id = `card-${asset}`;
+
+      card.innerHTML = `
+        <div class="asset">${asset}</div>
+        <div class="price" id="price-${asset}">-</div>
+        <div class="timestamp" id="timestamp-${asset}">Sin datos</div>
+      `;
+
+      return card;
+    }
+
+    function updateTicker(tick) {
+      const asset = tick.asset || "UNKNOWN";
+      const price = tick.price ?? "N/A";
+      const timestamp = tick.timestamp || new Date().toISOString();
+
+      if (emptyState) {
+        emptyState.remove();
+      }
+
+      if (!cards.has(asset)) {
+        const card = createCard(asset);
+        cards.set(asset, card);
+        grid.appendChild(card);
+      }
+
+      document.getElementById(`price-${asset}`).textContent = formatPrice(price);
+      document.getElementById(`timestamp-${asset}`).textContent = `Última actualización: ${timestamp}`;
+    }
+
+    function connectWebSocket() {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+      const socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        statusElement.textContent = "Conectado";
+        statusElement.style.background = "#166534";
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type === "tick" || data.asset) {
+            updateTicker(data);
+          }
+        } catch (error) {
+          console.error("Mensaje inválido:", event.data);
+        }
+      };
+
+      socket.onclose = () => {
+        statusElement.textContent = "Desconectado. Reintentando...";
+        statusElement.style.background = "#7f1d1d";
+
+        setTimeout(connectWebSocket, 2000);
+      };
+
+      socket.onerror = () => {
+        socket.close();
+      };
+    }
+
+    connectWebSocket();
+  </script>
+</body>
+</html>
