@@ -45,11 +45,15 @@ def handle_console_alert(ch, method, properties, body):
             price,
         )
 
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+
     except json.JSONDecodeError:
         logging.exception("Mensaje inválido recibido en console_alerts")
+        ch.basic_ack(delivery_tag=method.delivery_tag)
 
     except Exception:
         logging.exception("Error procesando alerta de consola")
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 
 
 def main():
@@ -63,7 +67,7 @@ def main():
             channel.exchange_declare(
                 exchange=CONSOLE_ALERTS_EXCHANGE,
                 exchange_type="fanout",
-                durable=False,
+                durable=True,
             )
 
             result = channel.queue_declare(
@@ -82,7 +86,7 @@ def main():
             channel.basic_consume(
                 queue=queue_name,
                 on_message_callback=handle_console_alert,
-                auto_ack=True,
+                auto_ack=False,
             )
 
             logging.info(
