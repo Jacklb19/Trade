@@ -1,113 +1,119 @@
-import json
-import logging
-import os
-import time
+# ingestion_bridge — Puente RabbitMQ → Kafka
+# Consume ticks del Topic Exchange de RabbitMQ y los republica
+# en el topic 'historical_ticks' de Kafka usando el asset como key.
 
 import pika
+import json
+import time
+import signal
+import sys
+import os
+import logging
 from kafka import KafkaProducer
-from pika.exceptions import AMQPConnectionError
+from kafka.errors import NoBrokersAvailable
 
+# --- Logging estructurado ---
 logging.basicConfig(
     level=logging.INFO,
-    format="[ingestion_bridge] %(asctime)s %(levelname)s: %(message)s",
+    format="%(asctime)s [ingestion_bridge] %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
+logger = logging.getLogger(__name__)
 
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
-RABBITMQ_EXCHANGE = os.getenv("TICKS_EXCHANGE", "market_ticks")
-RABBITMQ_BINDING_KEY = os.getenv("TICKS_BINDING_KEY", "ticks.#")
+RABBITMQ_HOST = os.environ.get("RABBITMQ_HOST", "rabbitmq")
+KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+EXCHANGE_NAME = "market_ticks"
+KAFKA_TOPIC = "historical_ticks"
 
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
-KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "historical_ticks")
+running = True
+bridge_count = 0
 
-def connect_to_rabbitmq():
-    while True:
+
+def connect_kafka_producer():
+    """Conexión Kafka con backoff exponencial."""
+    delay = 1
+    max_delay = 30
+    while running:
         try:
-            logging.info("Conectando a RabbitMQ en %s", RABBITMQ_URL)
-            parameters = pika.URLParameters(RABBITMQ_URL)
-            return pika.BlockingConnection(parameters)
-        except AMQPConnectionError:
-            logging.warning("RabbitMQ no disponible. Reintentando en 5 segundos...")
-            time.sleep(5)
-
-def connect_to_kafka():
-    while True:
-        try:
-            logging.info("Conectando a Kafka en %s", KAFKA_BOOTSTRAP_SERVERS)
             producer = KafkaProducer(
-                bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+                bootstrap_servers=KAFKA_BOOTSTRAP,
                 value_serializer=lambda v: json.dumps(v).encode("utf-8"),
                 key_serializer=lambda k: k.encode("utf-8") if k else None,
             )
+            logger.info("Conectado a Kafka")
             return producer
-        except Exception as e:
-            logging.warning("Kafka no disponible (%s). Reintentando en 5 segundos...", e)
-            time.sleep(5)
+        except NoBrokersAvailable:
+            logger.warning(f"Kafka no disponible, reintentando en {delay}s...")
+            time.sleep(delay)
+            delay = min(delay * 2, max_delay)
+    return None
+
+
+def connect_rabbitmq():
+    """Conexión RabbitMQ con backoff exponencial."""
+    delay = 1
+    max_delay = 30
+    while running:
+        try:
+            connection = pika.BlockingConnection(
+                pika.ConnectionParameters(host=RABBITMQ_HOST, heartbeat=600)
+            )
+            logger.info("Conectado a RabbitMQ")
+            return connection
+        except pika.exceptions.AMQPConnectionError:
+            logger.warning(f"RabbitMQ no disponible, reintentando en {delay}s...")
+            time.sleep(delay)
+            delay = min(delay * 2, max_delay)
+    return None
+
+
+def graceful_shutdown(signum, frame):
+    global running
+    logger.info("Señal de apagado recibida, cerrando...")
+    running = False
+    sys.exit(0)
+
 
 def main():
-    # Conexiones
-    rabbitmq_conn = connect_to_rabbitmq()
-    rabbitmq_channel = rabbitmq_conn.channel()
-    
-    kafka_producer = connect_to_kafka()
+    global bridge_count
 
-    # Declarar el exchange en RabbitMQ
-    rabbitmq_channel.exchange_declare(
-        exchange=RABBITMQ_EXCHANGE,
-        exchange_type="topic",
-        durable=False,
-    )
+    signal.signal(signal.SIGTERM, graceful_shutdown)
+    signal.signal(signal.SIGINT, graceful_shutdown)
 
-    # Declarar cola exclusiva, anónima y no duradera
-    result = rabbitmq_channel.queue_declare(
-        queue="",
-        exclusive=True,
-        auto_delete=True,
-        durable=False,
-    )
+    kafka_producer = connect_kafka_producer()
+    connection = connect_rabbitmq()
+    if not kafka_producer or not connection:
+        return
+
+    channel = connection.channel()
+    channel.exchange_declare(exchange=EXCHANGE_NAME, exchange_type="topic", durable=True)
+
+    result = channel.queue_declare(queue="", exclusive=True)
     queue_name = result.method.queue
+    channel.queue_bind(exchange=EXCHANGE_NAME, queue=queue_name, routing_key="ticks.#")
 
-    # Bind
-    rabbitmq_channel.queue_bind(
-        exchange=RABBITMQ_EXCHANGE,
-        queue=queue_name,
-        routing_key=RABBITMQ_BINDING_KEY,
-    )
+    def callback(ch, method, properties, body):
+        global bridge_count
+        tick = json.loads(body)
+        asset = tick.get("asset", "UNKNOWN")
 
-    def on_tick_callback(ch, method, properties, body):
-        try:
-            tick = json.loads(body.decode("utf-8"))
-            asset = tick.get("asset", "UNKNOWN")
-            
-            logging.info("Puenteando tick: %s -> %s", asset, tick.get("price"))
-            
-            # Publicar en Kafka usando el activo como key de partición
-            kafka_producer.send(
-                topic=KAFKA_TOPIC,
-                key=asset,
-                value=tick,
-            )
-            kafka_producer.flush()
-            
-        except Exception as e:
-            logging.error("Error puenteando mensaje a Kafka: %s", e)
+        kafka_producer.send(KAFKA_TOPIC, key=asset, value=tick)
+        bridge_count += 1
 
-    rabbitmq_channel.basic_consume(
-        queue=queue_name,
-        on_message_callback=on_tick_callback,
-        auto_ack=True,
-    )
+        if bridge_count % 25 == 0:
+            logger.info(f"Mensajes transferidos: {bridge_count} (último: {asset})")
 
-    logging.info("Puente de ingestión listo. Escuchando ticks de RabbitMQ y enviando a Kafka...")
-    
+    channel.basic_consume(queue=queue_name, on_message_callback=callback, auto_ack=True)
+
+    logger.info("Puente RabbitMQ → Kafka activo...")
     try:
-        rabbitmq_channel.start_consuming()
-    except KeyboardInterrupt:
-        logging.info("Puente detenido manualmente")
+        channel.start_consuming()
     finally:
-        if rabbitmq_conn and rabbitmq_conn.is_open:
-            rabbitmq_conn.close()
         if kafka_producer:
             kafka_producer.close()
+        if connection and connection.is_open:
+            connection.close()
+
 
 if __name__ == "__main__":
     main()

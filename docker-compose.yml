@@ -88,7 +88,7 @@ services:
   market_data_feed:
     build: ./market_data_feed
     environment:
-      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - RABBITMQ_HOST=rabbitmq
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -96,7 +96,7 @@ services:
   ingestion_bridge:
     build: ./ingestion_bridge
     environment:
-      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - RABBITMQ_HOST=rabbitmq
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     depends_on:
       rabbitmq:

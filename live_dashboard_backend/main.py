@@ -112,7 +112,7 @@ async def rabbitmq_consumer(app: web.Application) -> None:
             exchange = await channel.declare_exchange(
                 EXCHANGE_NAME,
                 ExchangeType.TOPIC,
-                durable=False,
+                durable=True,
             )
 
             queue = await channel.declare_queue(
