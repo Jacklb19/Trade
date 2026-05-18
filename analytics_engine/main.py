@@ -24,8 +24,8 @@ KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 INPUT_TOPIC = "historical_ticks"
 OUTPUT_TOPIC = "trading_signals"
 SMA_WINDOW = 5
-BUY_THRESHOLD = 1.05   # Precio > SMA * 1.05 → BUY
-SELL_THRESHOLD = 0.95   # Precio < SMA * 0.95 → SELL
+BUY_THRESHOLD = 1.008   # Precio > SMA * 1.008 → BUY (0.8% de desvío)
+SELL_THRESHOLD = 0.992   # Precio < SMA * 0.992 → SELL (0.8% de desvío)
 
 # Estado en memoria: historial de precios por asset
 price_history = {}
