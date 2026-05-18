@@ -52,61 +52,72 @@ def connect_to_kafka():
 
 
 def main():
-    # Inicializar RabbitMQ
-    connection = connect_to_rabbitmq()
-    channel = connection.channel()
+    while True:
+        connection = None
+        consumer = None
+        try:
+            # Inicializar RabbitMQ
+            connection = connect_to_rabbitmq()
+            channel = connection.channel()
 
-    # Declaraciones idempotentes
-    channel.queue_declare(queue=EMAIL_QUEUE, durable=True)
-    channel.exchange_declare(
-        exchange=CONSOLE_ALERTS_EXCHANGE, 
-        exchange_type="fanout", 
-        durable=True
-    )
-
-    # Inicializar Kafka
-    consumer = connect_to_kafka()
-    logging.info("Suscrito a Kafka topic '%s' con group.id '%s'", TOPIC_NAME, GROUP_ID)
-
-    try:
-        for msg in consumer:
-            signal = msg.value
-            asset = signal.get("asset", "UNKNOWN")
-            logging.info("Reenviando señal de %s a RabbitMQ", asset)
-
-            body = json.dumps(signal)
-
-            # Publicar en email_queue (Work Queue)
-            channel.basic_publish(
-                exchange="",
-                routing_key=EMAIL_QUEUE,
-                body=body,
-                properties=pika.BasicProperties(
-                    delivery_mode=2,  # Mensaje persistente
-                    content_type="application/json"
-                )
+            # Declaraciones idempotentes
+            channel.queue_declare(queue=EMAIL_QUEUE, durable=True)
+            channel.exchange_declare(
+                exchange=CONSOLE_ALERTS_EXCHANGE, 
+                exchange_type="fanout", 
+                durable=True
             )
 
-            # Publicar en console_alerts (Fanout Exchange)
-            channel.basic_publish(
-                exchange=CONSOLE_ALERTS_EXCHANGE,
-                routing_key="",
-                body=body,
-                properties=pika.BasicProperties(
-                    delivery_mode=2,  # Mensaje persistente
-                    content_type="application/json"
-                )
-            )
+            # Inicializar Kafka
+            consumer = connect_to_kafka()
+            logging.info("Suscrito a Kafka topic '%s' con group.id '%s'", TOPIC_NAME, GROUP_ID)
 
-    except KeyboardInterrupt:
-        logging.info("Router detenido manualmente")
-    except Exception:
-        logging.exception("Error en el bucle principal")
-    finally:
-        if connection and connection.is_open:
-            connection.close()
-        if consumer:
-            consumer.close()
+            for msg in consumer:
+                signal = msg.value
+                asset = signal.get("asset", "UNKNOWN")
+                logging.info("Reenviando señal de %s a RabbitMQ", asset)
+
+                body = json.dumps(signal)
+
+                # Publicar en email_queue (Work Queue)
+                channel.basic_publish(
+                    exchange="",
+                    routing_key=EMAIL_QUEUE,
+                    body=body,
+                    properties=pika.BasicProperties(
+                        delivery_mode=2,  # Mensaje persistente
+                        content_type="application/json"
+                    )
+                )
+
+                # Publicar en console_alerts (Fanout Exchange)
+                channel.basic_publish(
+                    exchange=CONSOLE_ALERTS_EXCHANGE,
+                    routing_key="",
+                    body=body,
+                    properties=pika.BasicProperties(
+                        delivery_mode=2,  # Mensaje persistente
+                        content_type="application/json"
+                    )
+                )
+
+        except KeyboardInterrupt:
+            logging.info("Router detenido manualmente")
+            break
+        except Exception:
+            logging.exception("Error en el bucle principal del notification_router. Reintentando en 5 segundos...")
+            time.sleep(5)
+        finally:
+            if connection and connection.is_open:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+            if consumer:
+                try:
+                    consumer.close()
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":

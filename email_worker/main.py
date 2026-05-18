@@ -12,9 +12,12 @@ logging.basicConfig(
     format="[email_worker] %(asctime)s %(levelname)s: %(message)s",
 )
 
+import socket
+
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
 EMAIL_QUEUE = os.getenv("EMAIL_QUEUE", "email_queue")
 EMAIL_SIMULATION_SECONDS = float(os.getenv("EMAIL_SIMULATION_SECONDS", "0.5"))
+WORKER_ID = os.getenv("WORKER_ID", socket.gethostname())
 
 
 def connect_to_rabbitmq():
@@ -40,8 +43,9 @@ def handle_email(ch, method, properties, body):
         sma = signal.get("sma", "N/A")
 
         logging.info(
-            "ENVIANDO EMAIL: ¡Momento de Invertir! Señal de %s para %s | "
+            "ENVIANDO EMAIL [Worker %s]: ¡Momento de Invertir! Señal de %s para %s | "
             "Razón: %s | Precio: %s | SMA: %s",
+            WORKER_ID,
             action,
             asset,
             reason,
