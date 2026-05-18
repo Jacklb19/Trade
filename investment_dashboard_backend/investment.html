@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Investment Signals - Plataforma de Trading</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #0f172a;
+      color: #e5e7eb;
+    }
+
+    header {
+      padding: 24px;
+      background: #111827;
+      border-bottom: 1px solid #374151;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+    }
+
+    .subtitle {
+      margin-top: 8px;
+      color: #9ca3af;
+    }
+
+    main {
+      padding: 24px;
+    }
+
+    #status {
+      display: inline-block;
+      margin-bottom: 24px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: #374151;
+      font-size: 14px;
+    }
+
+    #signal-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card.BUY {
+      border-left: 6px solid #22c55e;
+    }
+
+    .card.SELL {
+      border-left: 6px solid #ef4444;
+    }
+
+    .asset {
+      font-size: 22px;
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+
+    .signal-badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: bold;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .BUY .signal-badge {
+      background: #166534;
+      color: #bbf7d0;
+    }
+
+    .SELL .signal-badge {
+      background: #7f1d1d;
+      color: #fecaca;
+    }
+
+    .price-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .price-label {
+      color: #9ca3af;
+      font-size: 14px;
+    }
+
+    .price-value {
+      font-size: 20px;
+      font-weight: bold;
+    }
+
+    .diff-value {
+      font-weight: bold;
+    }
+
+    .diff-up { color: #22c55e; }
+    .diff-down { color: #ef4444; }
+
+    .reason {
+      margin-top: 12px;
+      font-style: italic;
+      color: #d1d5db;
+      font-size: 14px;
+    }
+
+    .timestamp {
+      margin-top: 16px;
+      color: #9ca3af;
+      font-size: 12px;
+      border-top: 1px solid #1f2937;
+      padding-top: 8px;
+    }
+
+    .empty {
+      color: #9ca3af;
+      padding: 24px;
+      border: 1px dashed #4b5563;
+      border-radius: 16px;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Investment Signals</h1>
+    <div class="subtitle">
+      Cold-Path con Kafka Topic → WebSocket
+    </div>
+  </header>
+
+  <main>
+    <div id="status">Conectando...</div>
+
+    <div id="signal-grid">
+      <div class="empty" id="empty-state">
+        Esperando señales de inversión...
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const statusElement = document.getElementById("status");
+    const grid = document.getElementById("signal-grid");
+    const emptyState = document.getElementById("empty-state");
+
+    const cards = new Map();
+
+    function formatPrice(price) {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 2
+      }).format(price);
+    }
+
+    function createCard(asset) {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.id = `card-${asset}`;
+
+      card.innerHTML = `
+        <div class="asset">${asset}</div>
+        <div class="signal-badge" id="badge-${asset}">-</div>
+        
+        <div class="price-row">
+          <span class="price-label">Precio:</span>
+          <span class="price-value" id="price-${asset}">-</span>
+        </div>
+        
+        <div class="price-row">
+          <span class="price-label">SMA(5):</span>
+          <span class="price-value" id="sma-${asset}">-</span>
+        </div>
+        
+        <div class="price-row">
+          <span class="price-label">Diferencia:</span>
+          <span class="diff-value" id="diff-${asset}">-</span>
+        </div>
+
+        <div class="reason" id="reason-${asset}"></div>
+        <div class="timestamp" id="timestamp-${asset}">-</div>
+      `;
+
+      return card;
+    }
+
+    function updateSignal(signal) {
+      const asset = signal.asset || "UNKNOWN";
+      const type = signal.signal || "NONE";
+      const price = signal.price || 0;
+      const sma = signal.sma || 0;
+      const reason = signal.reason || "";
+      const timestamp = signal.timestamp || new Date().toISOString();
+
+      if (emptyState && document.contains(emptyState)) {
+        emptyState.remove();
+      }
+
+      if (!cards.has(asset)) {
+        const card = createCard(asset);
+        cards.set(asset, card);
+        grid.appendChild(card);
+      }
+
+      const card = document.getElementById(`card-${asset}`);
+      card.className = `card ${type}`;
+      
+      document.getElementById(`badge-${asset}`).textContent = type;
+      document.getElementById(`price-${asset}`).textContent = formatPrice(price);
+      document.getElementById(`sma-${asset}`).textContent = formatPrice(sma);
+      document.getElementById(`reason-${asset}`).textContent = reason;
+      document.getElementById(`timestamp-${asset}`).textContent = `Actualizado: ${new Date(timestamp).toLocaleTimeString()}`;
+
+      // Calcular diferencia %
+      if (sma > 0) {
+        const diff = ((price - sma) / sma) * 100;
+        const diffElement = document.getElementById(`diff-${asset}`);
+        diffElement.textContent = `${diff > 0 ? '+' : ''}${diff.toFixed(2)}%`;
+        diffElement.className = `diff-value ${diff >= 0 ? 'diff-up' : 'diff-down'}`;
+      }
+    }
+
+    function connectWebSocket() {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+      const socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        statusElement.textContent = "Conectado";
+        statusElement.style.background = "#166534";
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type === "initial_state" && Array.isArray(data.data)) {
+            data.data.forEach(updateSignal);
+          } else if (data.type === "signal" && data.data) {
+            updateSignal(data.data);
+          } else if (data.asset) {
+             // Fallback para mensajes directos
+            updateSignal(data);
+          }
+        } catch (error) {
+          console.error("Error procesando mensaje:", error);
+        }
+      };
+
+      socket.onclose = () => {
+        statusElement.textContent = "Desconectado. Reintentando...";
+        statusElement.style.background = "#7f1d1d";
+        setTimeout(connectWebSocket, 2000);
+      };
+
+      socket.onerror = () => {
+        socket.close();
+      };
+    }
+
+    connectWebSocket();
+  </script>
+</body>
+</html>

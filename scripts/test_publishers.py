@@ -53,7 +53,7 @@ def publish_signal():
     channel.exchange_declare(
         exchange="console_alerts",
         exchange_type="fanout",
-        durable=False,
+        durable=True,
     )
 
     signal = {
